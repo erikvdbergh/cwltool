@@ -175,3 +175,15 @@ def bytes2str_in_dicts(a):
 
     # simply return elements itself
     return a
+
+def visit_class(rec, cls, op):  # type: (Any, Iterable, Union[Callable[..., Any], partial[Any]]) -> None
+    """Apply a function to with "class" in cls."""
+
+    if isinstance(rec, dict):
+        if "class" in rec and rec.get("class") in cls:
+            op(rec)
+        for d in rec:
+            visit_class(rec[d], cls, op)
+    if isinstance(rec, list):
+        for d in rec:
+            visit_class(d, cls, op)
