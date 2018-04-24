@@ -18,8 +18,7 @@ from functools import cmp_to_key
 from typing import (Any, Callable, Dict, Generator, List, Set, Text,
                     Tuple, Union, cast)
 
-import avro.schema
-import schema_salad.schema
+import schema_salad.schema as schema
 import schema_salad.validate as validate
 import six
 from pkg_resources import resource_stream
@@ -41,11 +40,6 @@ from .secrets import SecretStore
 from .stdfsaccess import StdFsAccess
 from .utils import aslist, get_feature, copytree_with_merge, onWindows
 
-
-# if six.PY3:
-# AvroSchemaFromJSONData = avro.schema.SchemaFromJSONData
-# else:
-AvroSchemaFromJSONData = avro.schema.make_avsc_object
 
 class LogAsDebugFilter(logging.Filter):
     def __init__(self, name, parent):  # type: (Text, logging.Logger) -> None
@@ -111,7 +105,7 @@ salad_files = ('metaschema.yml',
                'vocab_res_src.yml',
                'vocab_res_proc.yml')
 
-SCHEMA_CACHE = {}  # type: Dict[Text, Tuple[Loader, Union[avro.schema.Names, avro.schema.SchemaParseException], Dict[Text, Any], Loader]]
+SCHEMA_CACHE = {}  # type: Dict[Text, Tuple[Loader, Union[schema.Names, schema.SchemaParseException], Dict[Text, Any], Loader]]
 SCHEMA_FILE = None  # type: Dict[Text, Any]
 SCHEMA_DIR = None  # type: Dict[Text, Any]
 SCHEMA_ANY = None  # type: Dict[Text, Any]
@@ -132,7 +126,7 @@ def use_custom_schema(version, name, text):
         del SCHEMA_CACHE[version]
 
 def get_schema(version):
-    # type: (Text) -> Tuple[Loader, Union[avro.schema.Names, avro.schema.SchemaParseException], Dict[Text,Any], Loader]
+    # type: (Text) -> Tuple[Loader, Union[schema.Names, schema.SchemaParseException], Dict[Text,Any], Loader]
 
     if version in SCHEMA_CACHE:
         return SCHEMA_CACHE[version]
@@ -162,10 +156,10 @@ def get_schema(version):
 
     if version in custom_schemas:
         cache[custom_schemas[version][0]] = custom_schemas[version][1]
-        SCHEMA_CACHE[version] = schema_salad.schema.load_schema(
+        SCHEMA_CACHE[version] = schema.load_schema(
             custom_schemas[version][0], cache=cache)
     else:
-        SCHEMA_CACHE[version] = schema_salad.schema.load_schema(
+        SCHEMA_CACHE[version] = schema.load_schema(
             "https://w3id.org/cwl/CommonWorkflowLanguage.yml", cache=cache)
 
     return SCHEMA_CACHE[version]
@@ -412,7 +406,7 @@ class Process(six.with_metaclass(abc.ABCMeta, object)):
         """
 
         self.metadata = kwargs.get("metadata", {})  # type: Dict[Text,Any]
-        self.names = None  # type: avro.schema.Names
+        self.names = None  # type: schema.Names
 
         global SCHEMA_FILE, SCHEMA_DIR, SCHEMA_ANY  # pylint: disable=global-statement
         if SCHEMA_FILE is None:
@@ -424,9 +418,9 @@ class Process(six.with_metaclass(abc.ABCMeta, object)):
             SCHEMA_DIR = cast(Dict[Text, Any],
                               SCHEMA_CACHE["v1.0"][3].idx["https://w3id.org/cwl/cwl#Directory"])
 
-        names = schema_salad.schema.make_avro_schema([SCHEMA_FILE, SCHEMA_DIR, SCHEMA_ANY],
-                                                     schema_salad.ref_resolver.Loader({}))[0]
-        if isinstance(names, avro.schema.SchemaParseException):
+        names = schema.make_avro_schema([SCHEMA_FILE, SCHEMA_DIR, SCHEMA_ANY],
+                                        Loader({}))[0]
+        if isinstance(names, schema.SchemaParseException):
             raise names
         else:
             self.names = names
@@ -452,10 +446,10 @@ class Process(six.with_metaclass(abc.ABCMeta, object)):
 
         if sd:
             sdtypes = sd["types"]
-            av = schema_salad.schema.make_valid_avro(sdtypes, {t["name"]: t for t in avroize_type(sdtypes)}, set())
+            av = schema.make_valid_avro(sdtypes, {t["name"]: t for t in avroize_type(sdtypes)}, set())
             for i in av:
                 self.schemaDefs[i["name"]] = i  # type: ignore
-            AvroSchemaFromJSONData(av, self.names)  # type: ignore
+            schema.AvroSchemaFromJSONData(av, self.names)  # type: ignore
 
         # Build record schema from inputs
         self.inputs_record_schema = {
@@ -485,23 +479,15 @@ class Process(six.with_metaclass(abc.ABCMeta, object)):
                 elif key == "outputs":
                     self.outputs_record_schema["fields"].append(c)
 
-        try:
-            self.inputs_record_schema = cast(Dict[six.text_type, Any], schema_salad.schema.make_valid_avro(self.inputs_record_schema, {}, set()))
-            AvroSchemaFromJSONData(self.inputs_record_schema, self.names)
-        except avro.schema.SchemaParseException as e:
-            raise validate.ValidationException(u"Got error '%s' while "
-                    "processing inputs of %s:\n%s" %
-                                               (Text(e), self.tool["id"],
-                                                json.dumps(self.inputs_record_schema, indent=4)))
-
-        try:
-            self.outputs_record_schema = cast(Dict[six.text_type, Any], schema_salad.schema.make_valid_avro(self.outputs_record_schema, {}, set()))
-            AvroSchemaFromJSONData(self.outputs_record_schema, self.names)
-        except avro.schema.SchemaParseException as e:
-            raise validate.ValidationException(u"Got error '%s' while "
-                    "processing outputs of %s:\n%s" %
-                                               (Text(e), self.tool["id"],
-                                                json.dumps(self.outputs_record_schema, indent=4)))
+        with SourceLine(toolpath_object, "inputs", validate.ValidationException):
+            self.inputs_record_schema = cast(
+                Dict[six.text_type, Any], schema.make_valid_avro(
+                    self.inputs_record_schema, {}, set()))
+            schema.AvroSchemaFromJSONData(self.inputs_record_schema, self.names)
+        with SourceLine(toolpath_object, "outputs", validate.ValidationException):
+            self.outputs_record_schema = cast(Dict[six.text_type, Any],
+                    schema.make_valid_avro(self.outputs_record_schema, {}, set()))
+            schema.AvroSchemaFromJSONData(self.outputs_record_schema, self.names)
 
         if toolpath_object.get("class") is not None and not kwargs.get("disable_js_validation", False):
             if kwargs.get("js_hint_options_file") is not None:
