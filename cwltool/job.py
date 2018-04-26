@@ -422,7 +422,7 @@ def _job_popen(
         job_dir=None,  # type: Text
         job_script_contents=None,  # type: Text
         timelimit=None,  # type: int
-        name=None  # type: str
+        name=None  # type: Text
 ):
     # type: (...) -> int
     if not job_script_contents and not FORCE_SHELLED_POPEN:
